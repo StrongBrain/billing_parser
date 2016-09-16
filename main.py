@@ -74,7 +74,6 @@ class BillingParser(object):
             cursor = conn.cursor()
             for obj, values in data.items():
                 for obj_id, cost in values.items():
-                    print query
                     cursor.execute(query, (obj, obj_id, cost, cost))
 
     def parse_billing(self, archives):
