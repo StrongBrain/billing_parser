@@ -68,7 +68,9 @@ class BillingParser(object):
 
     def insert_data(self, data):
         query = """INSERT OR REPLACE INTO billing_aggregation(object_type, object_id, cost)
-                   VALUES(?, ?, COALESCE((SELECT cost FROM billing_aggregation WHERE object_type=object_type and object_id=object_id) + ?, ?))"""
+                   VALUES(?, ?, COALESCE((
+                   SELECT cost FROM billing_aggregation
+                   WHERE object_type=object_type and object_id=object_id) + ?, ?))"""
         conn = sqlite3.connect(self.__config.get('db', 'sqlite_db'))
         with conn:
             cursor = conn.cursor()
