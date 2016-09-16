@@ -5,12 +5,13 @@ import csv
 import logging
 import logging.config
 import os
+import sqlite3
 import threading
 import zipfile
 
 from Queue import Queue
 
-from utils import threadsafe_generator
+from utils import calculate_objects, get_archives, generate_chunks
 
 SCALR_TAG = 'user:scalr-meta'
 COST_TAG = 'Cost'
@@ -65,6 +66,16 @@ class BillingParser(object):
                     cost_ind = ind
         return (scalr_ind, cost_ind)
 
+    def insert_data(self, data):
+        query = """INSERT OR REPLACE INTO billing_aggregation(object_type, object_id, cost)
+                   VALUES(?, ?, COALESCE((SELECT cost FROM billing_aggregation WHERE object_type=object_type and object_id=object_id) + ?, ?))"""
+        conn = sqlite3.connect(self.__config.get('db', 'sqlite_db'))
+        with conn:
+            cursor = conn.cursor()
+            for obj, values in data.items():
+                for obj_id, cost in values.items():
+                    print query
+                    cursor.execute(query, (obj, obj_id, cost, cost))
 
     def parse_billing(self, archives):
         """ Parse billing reports in threads."""
@@ -73,8 +84,8 @@ class BillingParser(object):
             """ Extract zip archive to list of files. """
             while True:
                 try:
-                    lines = inputq.get()
-                    print lines
+                    #lines = inputq.get()
+                    lines = inputq.next()
                     line = lines.pop()
                 except StopIteration:
                     break
@@ -85,8 +96,8 @@ class BillingParser(object):
                 if len(scalr_data) == 5:
                     # avoid v1:
                     self.prepare_data(data, scalr_data[1:], float(cost))
-                    #print calculate_objects(data)
-                inputq.task_done()
+                    self.insert_data(data)
+                #inputq.task_done()
 
 
         outputq = {'env': {}, 'farm': {}, 'farm_role': {}, 'server': {}}
@@ -109,58 +120,25 @@ class BillingParser(object):
                         scalr_ind, cost_ind = self.get_tag_indexes(headers)
                         chunks = generate_chunks(csv_path)
 
-                    q = Queue()
-                    for line in chunks:
-                        q.put(line)
-                    print q.qsize()
+                    #q = Queue()
+                    #for line in chunks:
+                    #    q.put(line)
+                    #print q.qsize()
                     for thread_id in range(1, self.__num_threads + 1):
                         thread_name = 'parse_billing_%s' % thread_id
                         thr = threading.Thread(target=__extract_zip,
                                                name=thread_name,
-                                               args=(q, outputq, scalr_ind, cost_ind))
-                        thr.daemon = True
+                                               args=(chunks, outputq, scalr_ind, cost_ind))
+                                               #args=(q, outputq, scalr_ind, cost_ind))
+                        #thr.daemon = True
                         thr.start()
                         lookup_threads.append(thr)
-                    q.join()
-                    #for thr in lookup_threads:
-                    #    thr.join()
+                    #q.join()
+                    os.remove(csv_path)
+                    for thr in lookup_threads:
+                        thr.join()
 
         return outputq
-
-
-def calculate_objects(data_obj):
-    """ Calculate number of objects in data object. """
-    count = 0
-    for key in data_obj:
-        # iterate over env, farm, farm_role and server objects
-        count += len(data_obj[key])
-    return count
-
-def get_archives(folder):
-    """ Get list of archives in folder. """
-    archives = []
-    try:
-        archives = os.listdir(folder)
-    except OSError as err:
-        # No such directory
-        if err.errno != 2:
-            raise err
-    return [os.path.join(folder, x) for x in archives]
-
-@threadsafe_generator
-def generate_chunks(csv_path, chunksize=100):
-    """ Generates chunks from .csv file.
-        Take a CSV `reader` and yield `chunksize` sized slices.
-    """
-    chunk = []
-    with open(csv_path, "rb") as csvfile:
-        reader = csv.reader(csvfile)
-        for i, line in enumerate(reader):
-            if i % chunksize == 0 and i > 0:
-                yield chunk
-                del chunk[:]
-            chunk.append(line)
-        yield chunk
 
 
 if __name__ == '__main__':
